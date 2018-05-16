@@ -10,7 +10,7 @@ import Control.Lens
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Data.Maybe (listToMaybe)
-import Data.Text (pack, unpack)
+import Data.Text (pack, unpack, empty)
 import Data.Traversable
 import Distribution.InstalledPackageInfo
 import Distribution.Package
@@ -41,7 +41,7 @@ packageDbPath UserDb = do
          -- can report no path...
          --     [] -> hsdevError $ ToolError ghc_pkg "empty output, expecting path to user package db"
          -- Report an empty path instead.
-                [] -> return $ fromFilePath ""
+                [] -> return empty
 packageDbPath (PackageDb fpath) = return fpath
 
 -- | Read package-db conf files
