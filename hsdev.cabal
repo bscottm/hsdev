@@ -33,7 +33,8 @@ library
   ghc-options: -Wall -fno-warn-tabs
 
   if !flag(docs)
-    cpp-options: -DNODOCS
+    cpp-options: "-DNODOCS"
+    ghc-options: "-DNODOCS"
 
   exposed-modules:
     Control.Apply.Util
@@ -178,7 +179,7 @@ library
     monad-control                     >= 1.0.1.0 && < 1.1,
     monad-loops                       >= 0.4.3 && < 0.5,
     mtl                               >= 2.2.1 && < 2.3,
-    network                           >= 2.6.3.1 && < 2.7,
+    network                           >= 2.6.3.1 && < 2.8,
     optparse-applicative              >= 0.12.1.0 && < 0.15,
     process                           >= 1.4.2.0 && < 1.7,
     regex-pcre-builtin                >= 0.94.4 && < 0.95,
