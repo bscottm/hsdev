@@ -15,4 +15,6 @@ flags:
   hsdev:
     docs: True
 
-system-ghc: True
+system-ghc: False
+docker:
+  enable: True
