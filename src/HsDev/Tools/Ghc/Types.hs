@@ -9,6 +9,7 @@ module HsDev.Tools.Ghc.Types (
 import Control.DeepSeq
 import Control.Lens (over, view, set, each, preview, makeLenses, _Just)
 import Control.Monad
+import Control.Monad.Fail (MonadFail)
 import Control.Monad.IO.Class
 import Data.Aeson
 import Data.Generics
@@ -19,9 +20,9 @@ import Data.Text (Text)
 import System.Log.Simple (MonadLog(..), scope)
 
 import GHC hiding (exprType, Module, moduleName)
-import GHC.SYB.Utils (everythingStaged, Stage(TypeChecker))
 import GhcPlugins (mkFunTys)
 import CoreUtils as C
+import NameSet (NameSet)
 import Desugar (deSugarExpr)
 import TcHsSyn (hsPatType)
 import Outputable
@@ -39,7 +40,7 @@ import HsDev.Util
 class HasType a where
 	getType :: GhcMonad m => a -> m (Maybe (SrcSpan, Type))
 
-instance HasType (LHsExpr Id) where
+instance HasType (LHsExpr TcId) where
 	getType e = do
 		env <- getSession
 		mbe <- liftIO $ liftM snd $ deSugarExpr env e
@@ -47,25 +48,35 @@ instance HasType (LHsExpr Id) where
 			ex <- mbe
 			return (getLoc e, C.exprType ex)
 
-instance HasType (LHsBind Id) where
-	getType (L _ FunBind { fun_id = fid, fun_matches = m}) = return $ Just (getLoc fid, typ) where
-		typ = mkFunTys (mg_arg_tys m) (mg_res_ty m)
+instance HasType (LHsBind TcId) where
+	getType (L _ FunBind { fun_id = fid, fun_matches = m}) = return $ do
+		argTys <- mgArgTys m
+		resTy <- mgResTy m
+		return (getLoc fid, mkFunTys argTys resTy)
 	getType _ = return Nothing
 
-instance HasType (LPat Id) where
+instance HasType (LPat TcId) where
 	getType (L spn pat) = return $ Just (spn, hsPatType pat)
 
 locatedTypes :: Typeable a => TypecheckedSource -> [Located a]
 locatedTypes = types' p where
 	types' :: Typeable r => (r -> Bool) -> GenericQ [r]
-	types' p' = everythingStaged TypeChecker (++) [] ([] `mkQ` (\x -> [x | p' x]))
+	types' p' = everythingTyped (++) [] ([] `mkQ` (\x -> [x | p' x]))
 	p (L spn _) = isGoodSrcSpan spn
 
-moduleTypes :: GhcMonad m => Path -> m [(SrcSpan, Type)]
+everythingTyped :: (r -> r -> r) -> r -> GenericQ r -> GenericQ r
+everythingTyped k z f x
+	| (const False `extQ` nameSet) x = z
+	| otherwise = foldl k (f x) (gmapQ (everythingTyped k z f) x)
+	where
+		nameSet :: NameSet -> Bool
+		nameSet = const True
+
+moduleTypes :: (MonadFail m, GhcMonad m) => Path -> m [(SrcSpan, Type)]
 moduleTypes fpath = do
 	fpath' <- liftIO $ canonicalize fpath
 	mg <- getModuleGraph
-	[m] <- liftIO $ flip filterM mg $ \m -> do
+	[m] <- liftIO $ flip filterM (modSummaries mg) $ \m -> do
 		mfile <- traverse (liftIO . canonicalize) $ ml_hs_file (ms_location m)
 		return (Just (view path fpath') == mfile)
 	p <- parseModule m
@@ -73,9 +84,9 @@ moduleTypes fpath = do
 	let
 		ts = tm_typechecked_source tm
 	liftM (catMaybes . concat) $ sequence [
-		mapM getType (locatedTypes ts :: [LHsExpr Id]),
-		mapM getType (locatedTypes ts :: [LHsBind Id]),
-		mapM getType (locatedTypes ts :: [LPat Id])]
+		mapM getType (locatedTypes ts :: [LHsExpr TcId]),
+		mapM getType (locatedTypes ts :: [LHsBind TcId]),
+		mapM getType (locatedTypes ts :: [LPat TcId])]
 
 data TypedExpr = TypedExpr {
 	_typedExpr :: Maybe Text,
@@ -98,7 +109,7 @@ instance FromJSON TypedExpr where
 		v .:: "type"
 
 -- | Get all types in module
-fileTypes :: (MonadLog m, GhcMonad m) => Module -> Maybe Text -> m [Note TypedExpr]
+fileTypes :: (MonadLog m, MonadFail m, GhcMonad m) => Module -> Maybe Text -> m [Note TypedExpr]
 fileTypes m msrc = scope "types" $ case view (moduleId . moduleLocation) m of
 	FileModule file proj -> do
 		file' <- liftIO $ canonicalize file
@@ -137,5 +148,5 @@ setModuleTypes ts = over (moduleScope . each . each) setType . over (moduleExpor
 		return $ set (symbolInfo . functionType) (Just $ view (note . typedType) tnote) d
 
 -- | Infer types in module
-inferTypes :: (MonadLog m, GhcMonad m) => Module -> Maybe Text -> m Module
+inferTypes :: (MonadLog m, MonadFail m, GhcMonad m) => Module -> Maybe Text -> m Module
 inferTypes m msrc = scope "infer" $ liftM (`setModuleTypes` m) $ fileTypes m msrc
